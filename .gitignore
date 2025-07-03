@@ -1,0 +1,4 @@
+config.sh
+logs/*
+firedancer/*
+state/*
