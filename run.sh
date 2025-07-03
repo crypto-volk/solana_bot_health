@@ -499,7 +499,7 @@ monitor_agave() {
     fi
 
     if grep -q "Processed Slot" <<< "$output"; then
-        health_status $output
+        health_status "$output"
         return 0
     fi
 
