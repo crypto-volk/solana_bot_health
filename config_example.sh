@@ -38,6 +38,7 @@ MAX_ATTEMPTS_CHECK_SYNC=240 # ~240 sec
 KEY_PAIR_PATH="$PWD/validator-keypair.json"
 DUMMY_KEYPAIR_PATH="${STATE_DIR}/temp-identity.json"
 CONFIG_PATH="~/config.toml"
+RESTART_WINDOW_TIMEOUT_S=900 # 15min
 
 # --- Icons ---
 OK_ICON='🟢'

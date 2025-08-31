@@ -72,6 +72,7 @@ set_bot_commands() {
         "commands": [
             {"command": "update", "description": "Обновить ноду"},
             {"command": "history_update", "description": "Получить историю обновления"},
+            {"command": "epoch_info", "description": "Информация об эпохе"},
             {"command": "service", "description": "Сервис"},
             {"command": "catchup", "description": "Проверить синхронизацию"},
             {"command": "monitor_agave", "description": "Проверить синхронизацию"},
@@ -94,6 +95,7 @@ set_bot_commands() {
 send_main_menu() {
     local message+="<b>/update</b> - обновление ноды%0A%0A"
     message+="<b>/history_update</b> - скачать историю обновлений%0A%0A"
+    message+="<b>/epoch_info</b> - информация об эпохе%0A%0A"
     message+="<b>/service</b> - Рестарт/Старт/Стоп/Версия%0A%0A"
     message+="<b>/catchup</b> - проверка синхронизации%0A%0A"
     message+="<b>/monitor_agave</b> - проверка синхронизации%0A%0A"
@@ -216,6 +218,10 @@ update() {
             send_file "$UPDATE_HISTORY_FILE"
             ;;
 
+        "/epoch_info")
+            epoch_info
+            ;;
+
         "/get_log_bot")
             send_file "$LOG_BOT_FILE"
             ;;
@@ -285,6 +291,15 @@ update() {
 
 validators() {
     output=$(${SUDO_CMD} solana validators | awk '/Stake By Version:/,0' 2>&1)
+    if [[ $? -eq 0 ]]; then
+        echo "$output" | while IFS= read -r line; do send_message "$line" true; done
+    else
+        send_message "Ошибка: $output" true
+    fi
+}
+
+epoch_info() {
+    output=$(${SUDO_CMD} solana epoch-info 2>&1)
     if [[ $? -eq 0 ]]; then
         echo "$output" | while IFS= read -r line; do send_message "$line" true; done
     else

@@ -97,8 +97,20 @@ format_duration() {
 }
 
 wait_for_restart_and_restart() {
-    ${SUDO_CMD} agave-validator --ledger ${LEDGER_FOLDER} wait-for-restart-window --max-delinquent-stake $MAX_DELINQUENT_STAKE > /dev/null 2>&1 && \
-    ${SUDO_CMD} systemctl restart ${SERVICE}
+    if [ "$MAX_DELINQUENT_STAKE" = "0" ]; then
+        echo "MAX_DELINQUENT_STAKE=0 — выполняем немедленный рестарт"
+        ${SUDO_CMD} systemctl restart ${SERVICE}
+        return
+    fi
+
+    timeout -k 2 ${RESTART_WINDOW_TIMEOUT_S} ${SUDO_CMD} agave-validator --ledger ${LEDGER_FOLDER} \
+        wait-for-restart-window --max-delinquent-stake $MAX_DELINQUENT_STAKE > /dev/null 2>&1
+
+    if [ $? -eq 0 ]; then
+        ${SUDO_CMD} systemctl restart ${SERVICE}
+    else
+        return 1
+    fi
 }
 
 install_firedancer_deps() {
@@ -268,12 +280,17 @@ main() {
 
     output_message "Установка $CLIENT $VERSION завершена за $(format_duration $(( $(date +%s) - $start_time )))."
 
+    local mins=$(( (RESTART_WINDOW_TIMEOUT_S + 59) / 60 ))
+
     if [ "$TELEGRAM" == "1" ]; then
-        run_with_animation wait_for_restart_and_restart "Ожидание окна перезапуска валидатора($MAX_DELINQUENT_STAKE)"
+        run_with_animation wait_for_restart_and_restart "Ожидание окна перезапуска валидатора($MAX_DELINQUENT_STAKE) макс ${mins} минут"
     else
-        output_message "Ожидание окна перезапуска валидатора (max-delinquent-stake: $MAX_DELINQUENT_STAKE)..."
+        output_message "Ожидание окна перезапуска валидатора (max-delinquent-stake: $MAX_DELINQUENT_STAKE) макс ${mins} минут"
         wait_for_restart_and_restart
-    fi
+    fi || {
+        output_message "⛔ Окно перезапуска валидатора не найдено за ${mins} минут"
+        return 1
+    }
 
     output_message "Валидатор перзапущен за $(format_duration $(( $(date +%s) - $start_time ))), ожидание синхронизации."
     if [ "$TELEGRAM" == "1" ]; then
