@@ -78,6 +78,7 @@ set_bot_commands() {
             {"command": "monitor_agave", "description": "Проверить синхронизацию"},
             {"command": "validators", "description": "Проверить валидаторов"},
             {"command": "halt_node", "description": "Остановить ноду по таймеру"},
+            {"command": "change_config", "description": "Поменять config"},
             {"command": "get_log_bot", "description": "Получить логи бота"},
             {"command": "log_service", "description": "Просмотр логов сервиса"},
             {"command": "reboot", "description": "!!! Перезагрузить ноду"}
@@ -102,6 +103,7 @@ send_main_menu() {
     message+="<b>/validators</b> - получить список валидаторов%0A%0A"
     message+="<b>/log_service</b> - просмотр логов сервиса%0A%0A"
     message+="<b>/halt_node</b> - остановить ноду по таймеру%0A%0A"
+    message+="<b>/change_config</b> - поменять config%0A%0A"
     message+="<b>/get_log_bot</b> - скачать логи бота%0A%0A"
 
     if [[ $CLIENT == $CLIENT_FIREDANCER ]]; then
@@ -191,6 +193,7 @@ STATE_LOG="log"
 STATE_LOG_2="log_2"
 
 STATE_HALT_DATETIME="halt_datetime"
+STATE_CHANGE_CONFIG="change_config"
 
 STATE_REBOOT="reboot"
 
@@ -211,7 +214,7 @@ update() {
 
         "/service")
             CURRENT_STATE=$STATE_SERVICE
-            generate_keyboard "Выберите действие" "start" "stop" "restart" "version"
+            generate_keyboard "Выберите действие" "start" "stop" "restart" "hard_restart" "version"
             ;;
 
         "/history_update")
@@ -253,6 +256,11 @@ update() {
             send_message "Введите дату и время остановки в формате UTC (например: 2025-07-02T15:00)"
             ;;
 
+        "/change_config")
+            CURRENT_STATE=$STATE_CHANGE_CONFIG
+            send_message $'Используйте формат:\n\nPUT.section.key=value — задать или обновить параметр\nGET.section.key — получить значение\n\nНапример:\nPUT.consensus.expected_shred_version=41708\nGET.consensus.expected_shred_version\n\nМожно отправить несколько строк подряд.'
+            ;;
+
         "/reboot")
             CURRENT_STATE=$STATE_REBOOT
             generate_keyboard "Вы уверены?" "Yes" "No"
@@ -276,6 +284,10 @@ update() {
                     handle_halt_datetime "$command"
                     ;;
 
+                "$STATE_CHANGE_CONFIG")
+                    handle_config_param "$command"
+                    ;;
+
                 "$STATE_REBOOT")
                     handle_reboot "$command"
                     ;;
@@ -287,6 +299,122 @@ update() {
             ;;
 
     esac
+}
+
+handle_config_param() {
+    if [[ "$CLIENT" == "$CLIENT_AGAVE" ]]; then
+        handle_config_param_agave "$@"
+    elif [[ "$CLIENT" == "$CLIENT_FIREDANCER" ]]; then
+        handle_config_param_firedancer "$@"
+    else
+        send_message "${NOK_ICON} Неизвестный клиент: $CLIENT"
+    fi
+}
+
+handle_config_param_agave() {
+    # TODO: реализовать обновление параметров supermajority для Agave
+    send_message "${NOK_ICON} Поддержка Agave для смены supermajority ещё не реализована"
+}
+
+handle_config_param_firedancer() {
+    local input="$1"
+
+    # ==== PUT ====
+    if [[ "$input" =~ ^PUT\.([a-zA-Z0-9_]+\.)?[a-zA-Z0-9_]+=.+$ ]]; then
+        local section_and_key="${input#PUT.}"
+        local keypart="${section_and_key%%=*}"
+        local value="${section_and_key#*=}"
+
+        local section=""
+        local key=""
+        if [[ "$keypart" == *.* ]]; then
+            section="${keypart%%.*}"
+            key="${keypart#*.}"
+        else
+            key="$keypart"
+        fi
+z
+        if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+            value="\"$value\""
+        fi
+
+        if [[ -n "$section" && ! $(grep "^\[$section\]" "$CONFIG_PATH") ]]; then
+            echo "[$section]" >> "$CONFIG_PATH"
+        fi
+
+        local sed_section="^\[${section:-consensus}\]"
+        local search_key="^\s*${key}\s*="
+
+        if grep -q "$search_key" "$CONFIG_PATH"; then
+            sed -i "s|$search_key.*|    ${key} = ${value}|" "$CONFIG_PATH"
+            send_message "${OK_ICON} Обновлено: [${section:-root}] $key = $value"
+        else
+            if [[ -n "$section" ]]; then
+                sed -i "/$sed_section/a\    ${key} = ${value}" "$CONFIG_PATH"
+            else
+                echo "${key} = ${value}" >> "$CONFIG_PATH"
+            fi
+            send_message "${OK_ICON} Добавлено: [${section:-root}] $key = $value"
+        fi
+
+    # ==== GET ====
+    elif [[ "$input" =~ ^GET\.([a-zA-Z0-9_]+\.)?[a-zA-Z0-9_]+$ ]]; then
+        local section_and_key="${input#GET.}"
+        local section=""
+        local key=""
+
+        if [[ "$section_and_key" == *.* ]]; then
+            section="${section_and_key%%.*}"
+            key="${section_and_key#*.}"
+        else
+            key="$section_and_key"
+        fi
+
+        local result
+        if [[ -n "$section" ]]; then
+            result=$(awk -v sec="$section" -v key="$key" '
+                $0 ~ "^[[]"sec"[]]" {in_sec=1; next}
+                in_sec && $0 ~ /^\[/ {in_sec=0}
+                in_sec && $0 ~ "^[[:space:]]*"key"[[:space:]]*=" {
+                    sub(/^[[:space:]]*/, "", $0)
+                    print $0
+
+                    if ($0 ~ /\]$/) {exit}
+
+                    if ($0 ~ /\[$/) {
+                        while (getline > 0) {
+                            print $0
+                            if ($0 ~ /\]/) exit
+                        }
+                    }
+                    exit
+                }' "$CONFIG_PATH")
+        else
+            result=$(awk -v key="$key" '
+                $0 ~ "^[[:space:]]*"key"[[:space:]]*=" {
+                    sub(/^[[:space:]]*/, "", $0)
+                    print $0
+
+                    if ($0 ~ /\]$/) {exit}
+                    if ($0 ~ /\[$/) {
+                        while (getline > 0) {
+                            print $0
+                            if ($0 ~ /\]/) exit
+                        }
+                    }
+                    exit
+                }' "$CONFIG_PATH")
+        fi
+
+        if [[ -n "$result" ]]; then
+            send_message "${OK_ICON} Значение: [${section:-root}] $result"
+        else
+            send_message "${NOK_ICON} Ключ $key не найден в [${section:-root}]"
+        fi
+
+    else
+        send_message "${NOK_ICON} Неверный формат. Используйте GET.section.key или PUT.section.key=value"
+    fi
 }
 
 validators() {
@@ -326,7 +454,7 @@ handle_service() {
     case "${CURRENT_STATE}" in
         "$STATE_SERVICE")
             case "$command" in
-                start|stop|restart)
+                start|stop|restart|hard_restart)
                     CURRENT_STATE=$STATE_SERVICE_UNSAFE
                     current_service_action=$command
                     generate_keyboard "Вы уверены?" "Yes" "No"
@@ -345,7 +473,25 @@ handle_service() {
 
         "$STATE_SERVICE_UNSAFE")
             if [[ "$command" == "Yes" ]]; then
-                ${SUDO_CMD} systemctl ${current_service_action} ${SERVICE}
+                if [[ "$current_service_action" == "hard_restart" ]]; then
+                    send_message "🛑 Выполняю hard_restart..."
+
+                    ${SUDO_CMD} systemctl stop ${SERVICE}
+
+                    if [[ -d "${LEDGER_FOLDER}_bak" ]]; then
+                        rm -rf "${LEDGER_FOLDER}_bak"
+                    fi
+                    if [[ -d "${LEDGER_FOLDER}" ]]; then
+                        mv "${LEDGER_FOLDER}" "${LEDGER_FOLDER}_bak"
+                    fi
+
+                    ${SUDO_CMD} systemctl start ${SERVICE}
+
+                    send_message "✅ Hard restart выполнен: ${LEDGER_FOLDER} перенесён в ${LEDGER_FOLDER}_bak, сервис перезапущен."
+                else
+                    ${SUDO_CMD} systemctl ${current_service_action} ${SERVICE}
+                    send_message "✅ Сервис ${SERVICE}: ${current_service_action} выполнен."
+                fi
             else
                 send_main_menu
             fi
@@ -420,7 +566,7 @@ handle_update() {
             if [[ $command =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
                 CURRENT_STATE=$STATE_UPDATE_2
                 current_version=$command
-                generate_keyboard "Выберите max-delinquent-stake" "5" "10" "15" "20" "25"
+                generate_keyboard "Выберите max-delinquent-stake" "0(без ожидания)" "5" "10" "15" "20" "25"
             else
                 send_message "Неправильно задана версия"
                 send_version_menu

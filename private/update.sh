@@ -219,8 +219,16 @@ check_agave_monitor_status() {
         frame_index=$(( (frame_index + 1) % ${#frames[@]} ))
 
         output=$(${SUDO_CMD} timeout 1 agave-validator --ledger "${LEDGER_FOLDER}" monitor 2>&1)
+
+        gossip_percent=$(grep -oP 'gossip_stake_percent: \K[0-9]+(\.[0-9]+)?' <<< "$output")
+        if [[ -n "$gossip_percent" ]]; then
+            edit_message_curl "📊 Gossip Stake Percent: ${gossip_percent}%" "$message_id"
+            return 0
+        fi
+
         if ! echo "$output" | grep -q "Processed Slot"; then
             edit_message_curl "⏳ Нода запускается: $output $frame" "$message_id"
+            ((attempt++))
             continue
         fi
 
