@@ -675,11 +675,12 @@ update_version() {
     TELEGRAM=1 ./private/update.sh "$current_version" "$max_delinquent"
 }
 
+UNKNOWN_COUNT=0
+
 run_loop() {
+    last_update_id=0
     if [[ -f "$ID_FILE" ]]; then
         last_update_id=$(cat "$ID_FILE")
-    else
-        last_update_id=0
     fi
 
     while true; do
@@ -691,20 +692,41 @@ run_loop() {
         fi
 
         results=$(echo "$updates" | jq -c '.result[]')
-
-        for update in $results; do
+        while IFS= read -r update; do
+            if ! echo "$update" | jq empty >/dev/null 2>&1; then
+                log_error "🚨 Broken update: $update"
+                continue
+            fi
             update_id=$(echo "$update" | jq -r '.update_id')
 
             if [ -z "$update_id" ] || [ "$update_id" -le "$last_update_id" ]; then
                 continue
             fi
 
+            log_info "📥 Raw update: $(echo "$update")"
             last_update_id=$update_id
             echo "$last_update_id" > "$ID_FILE"
 
-            command=$(echo $update | jq -r '.message.text')
+            command=$(echo "$update" | jq -r '.message.text // empty')
+            chat_id=$(echo "$update" | jq -r '.message.chat.id // empty')
+
+            if [[ -z "$chat_id" ]]; then
+                log_error "⚠️ update без chat_id: $update"
+                continue
+            fi
+
+            if [[ "$chat_id" != "$BOT_ID" ]]; then
+                ((UNKNOWN_COUNT++))
+                log_error "⛔ Получено $UNKNOWN_COUNT сообщений от неразрешённого chat_id=$chat_id проигнорировано"
+                continue
+            fi
+
+            if [[ -z "$command" ]]; then
+                log_error "⚠️ update без текста: $update"
+                continue
+            fi
             update $command
-        done
+        done <<< "$results"
 
         sleep 1
     done
